@@ -1,0 +1,29 @@
+[
+  {
+    "key": "train a decision tree",
+    "language": "python",
+    "value": {
+      "package": "sklearn.tree",
+      "function_name": "DecisionTreeClassifier",
+      "arguments": {
+        "X": "Feature matrix",
+        "y": "Target vector",
+        "params": "Optional hyperparameters"
+      },
+      "output": "Trained DecisionTree model"
+    }
+  },
+  {
+    "key": "train a linear regression model",
+    "language": "r",
+    "value": {
+      "package": "stats",
+      "function_name": "lm",
+      "arguments": {
+        "formula": "Model formula",
+        "data": "Training dataset"
+      },
+      "output": "Trained linear regression model"
+    }
+  }
+]
