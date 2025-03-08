@@ -1,39 +1,77 @@
-import rpy2.robjects as robjects
+#!/usr/bin/env python3
 import traceback
+import rpy2.robjects as robjects
+from rpy2.robjects import vectors as rvectors
 
 def execute_r_function(function_details, args):
     """
-    Executes an R function dynamically using rpy2.
-
-    :param function_details: Dictionary containing function metadata (package, function_name).
-    :param args: Dictionary containing the function arguments (e.g., {"formula": ..., "data": ...}).
-    :return: Execution result or error message.
+    Dynamically load an R package and call the specified function
+    with given arguments using rpy2.
     """
     try:
-        # Load the R package
-        robjects.r(f'library({function_details["package"]})')
-        r_function = robjects.r[function_details["function_name"]]
+        package_name = function_details["package"]
+        function_name = function_details["function_name"]
 
-        # Prepare arguments as a dictionary
+        # Load the required R package
+        robjects.r(f"library({package_name})")
+        r_func = robjects.r[function_name]
+
+        # Convert Python arguments into R-compatible objects
         r_args = {}
+        for key, value in args.items():
+            if isinstance(value, list):
+                # Handle lists of lists as data frames; otherwise, use vectors
+                if all(isinstance(row, list) for row in value):
+                    df_dict = {}
+                    num_cols = len(value[0])
+                    for col_idx in range(num_cols):
+                        col_name = f"col{col_idx}"
+                        col_vals = [row[col_idx] for row in value]
+                        if all(isinstance(item, (int, float)) for item in col_vals):
+                            df_dict[col_name] = rvectors.FloatVector(col_vals)
+                        else:
+                            df_dict[col_name] = rvectors.StrVector(str(x) for x in col_vals)
+                    r_args[key] = robjects.DataFrame(df_dict)
+                else:
+                    if all(isinstance(x, (int, float)) for x in value):
+                        r_args[key] = rvectors.FloatVector(value)
+                    else:
+                        r_args[key] = rvectors.StrVector(str(x) for x in value)
+            else:
+                # If it's a formula in string format, convert it
+                if key.lower() == "formula" and isinstance(value, str):
+                    r_args[key] = robjects.Formula(value)
+                else:
+                    r_args[key] = value
 
-        # Handle 'formula' argument (pass as string, R will convert it)
-        if "formula" in args:
-            r_args["formula"] = args["formula"]
-
-        # Handle 'data' argument (convert nested list to R data frame)
-        if "data" in args and isinstance(args["data"], list):
-            data = args["data"]
-            r_args["data"] = robjects.DataFrame({
-                "x": robjects.FloatVector([row[0] for row in data]),
-                "y": robjects.FloatVector([row[1] for row in data])
-            })
-
-        # Execute the function with named arguments
-        result = r_function(**r_args)
-
-        # Convert the R result to a Python-friendly dictionary
-        return {"success": True, "result": dict(result.items())}
+        # Call the R function with the prepared arguments
+        result = r_func(**r_args)
+        return {
+            "success": True,
+            "result": str(result)
+        }
 
     except Exception as e:
-        return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
+        return {
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
+
+# Optional local test
+if __name__ == "__main__":
+    function_details = {
+        "package": "stats",
+        "function_name": "lm"
+    }
+    args = {
+        "formula": "col1 ~ col0",
+        "data": [
+            [1, 1.2],
+            [2, 2.3],
+            [3, 3.5],
+            [4, 4.1]
+        ]
+    }
+    output = execute_r_function(function_details, args)
+    print(output)

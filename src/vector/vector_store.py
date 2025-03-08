@@ -1,106 +1,174 @@
+#!/usr/bin/env python3
 import faiss
 import numpy as np
 import os
 import json
+import sys
+import logging
 from pymongo import MongoClient
 from dotenv import load_dotenv
-from openai import OpenAI
+import openai
 
-# Load environment variables
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("AutoDS")
+
+# 1) Load environment variables (ensure OPENAI_API_KEY is set)
+from dotenv import load_dotenv
 load_dotenv()
-
-# Retrieve OpenAI API Key
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
-    raise ValueError("Missing OpenAI API key! Ensure it's set in the .env file.")
+    raise ValueError("Missing OPENAI_API_KEY environment variable. Check .env file or system envs.")
+openai.api_key = OPENAI_API_KEY
 
-# Initialize OpenAI client
-client = OpenAI(api_key=OPENAI_API_KEY)
-
-# Connect to MongoDB
+# 2) Setup MongoDB connection
 mongo_client = MongoClient("mongodb://localhost:27017/")
-db = mongo_client.autods_db
-functions_catalog = db.functions_catalog  # Corrected to ensure proper MongoDB usage
+db = mongo_client["AutoDS"]
+functions_catalog = db["functions_catalog"]
 
-# Function to fetch OpenAI Embeddings
-def get_embedding(text):
-    response = client.embeddings.create(
-        model="text-embedding-3-small",
+def get_embedding(text: str):
+    """
+    Retrieve an embedding vector from OpenAI given the text.
+    The model used here can be adjusted (e.g., to "text-embedding-ada-002").
+    """
+    response = openai.Embedding.create(
+        model="text-embedding-3-small",  # Change to "text-embedding-ada-002" if preferred
         input=[text]
     )
-    return np.array(response.data[0].embedding)
+    # Return the embedding vector as a NumPy array
+    return np.array(response["data"][0]["embedding"])
 
-# Load function descriptions from MongoDB
 def load_function_data():
-    functions = list(functions_catalog.find({}, {"_id": 0, "key": 1}))  # Fetch only 'key' field
-    descriptions = [f["key"] for f in functions]  # Extract function keys
-    return descriptions
+    """
+    Load all documents from 'functions_catalog'.
+    Returns a list of text descriptions and a mapping of ID to description.
+    """
+    functions = list(functions_catalog.find({}, {"_id": 1, "key": 1}))
+    logger.info(f"Loaded {len(functions)} functions from 'functions_catalog'")
 
-# Create FAISS index and store embeddings
+    if not functions:
+        logger.warning("No functions found. Ensure unify_database.py has been run.")
+
+    function_map = {}
+    descriptions = []
+    for func in functions:
+        doc_id = str(func["_id"])
+        text_key = func["key"]
+        function_map[doc_id] = text_key
+        descriptions.append(text_key)
+    return descriptions, function_map
+
 def build_faiss_index():
-    descriptions = load_function_data()
+    """
+    Build a FAISS index using the 'key' fields from 'functions_catalog'.
+    Returns the (index, descriptions, function_map).
+    """
+    descriptions, function_map = load_function_data()
     if not descriptions:
-        print("No functions found in the database.")
-        return None, []
+        logger.warning("No descriptions to embed. Stopping build process.")
+        return None, [], {}
 
-    embeddings = np.array([get_embedding(desc) for desc in descriptions])
-    index = faiss.IndexFlatL2(embeddings.shape[1])  # L2 distance-based FAISS index
-    index.add(embeddings)
+    logger.info(f"Generating embeddings for {len(descriptions)} functions.")
+    batch_size = 100
+    all_embeddings = []
 
-    return index, descriptions
+    # Generate embeddings in batches
+    for i in range(0, len(descriptions), batch_size):
+        batch = descriptions[i:i + batch_size]
+        total_batches = (len(descriptions) + batch_size - 1) // batch_size
+        logger.info(f"Processing batch {i // batch_size + 1} of {total_batches}")
+        try:
+            response = openai.Embedding.create(
+                model="text-embedding-3-small",  # or "text-embedding-ada-002"
+                input=batch
+            )
+            embeddings = [np.array(item["embedding"]) for item in response["data"]]
+            all_embeddings.extend(embeddings)
+        except Exception as e:
+            logger.error(f"Error generating embeddings: {e}")
+            return None, [], {}
 
-# Save FAISS index and function descriptions
-def save_faiss_index(index, descriptions):
+    if not all_embeddings:
+        logger.warning("No embeddings were generated.")
+        return None, [], {}
+
+    embeddings_array = np.array(all_embeddings).astype('float32')
+    dimension = embeddings_array.shape[1]
+
+    # Build FAISS index using L2 distance
+    index = faiss.IndexFlatL2(dimension)
+    index.add(embeddings_array)
+    return index, descriptions, function_map
+
+def save_faiss_index(index, descriptions, function_map):
+    """
+    Save the FAISS index along with descriptions and function map to files.
+    """
     if index is None:
-        print("No FAISS index to save.")
+        logger.warning("No FAISS index to save; skipping save operation.")
         return
 
-    faiss.write_index(index, "src/vector/functions.index")  # Save FAISS index
-    with open("src/vector/descriptions.txt", "w") as f:
-        f.write("\n".join(descriptions))  # Save descriptions
-    print("FAISS index and descriptions saved.")
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    os.makedirs(script_dir, exist_ok=True)
 
-# Function to search for the best-matching function
+    # Save the index, descriptions, and function map
+    faiss.write_index(index, os.path.join(script_dir, "functions.index"))
+    with open(os.path.join(script_dir, "descriptions.txt"), "w") as f:
+        f.write("\n".join(descriptions))
+    with open(os.path.join(script_dir, "function_map.json"), "w") as f:
+        json.dump(function_map, f)
+
+    logger.info("Saved FAISS index, descriptions, and function map.")
+
 def search_function(query, top_k=1):
-    if not os.path.exists("src/vector/functions.index"):
-        print("FAISS index not found. Run vector_store.py first.")
+    """
+    Embed the given query, load the FAISS index, search for the closest match,
+    and return the matching function document(s).
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    index_path = os.path.join(script_dir, "functions.index")
+    if not os.path.exists(index_path):
+        logger.error("No 'functions.index' found. Run the index build process first.")
         return None
 
-    # Load FAISS index
-    index = faiss.read_index("src/vector/functions.index")
-
-    # Load function descriptions
-    with open("src/vector/descriptions.txt", "r") as f:
+    # Load the index and supporting data
+    index = faiss.read_index(index_path)
+    with open(os.path.join(script_dir, "descriptions.txt"), "r") as f:
         descriptions = f.read().splitlines()
+    with open(os.path.join(script_dir, "function_map.json"), "r") as f:
+        function_map = json.load(f)
 
-    # Convert query to embedding
-    query_embedding = np.array([get_embedding(query)])
-
-    # Search FAISS for the closest match
-    _, indices = index.search(query_embedding, top_k)
-
-    # Retrieve the best match
-    best_match_index = indices[0][0]
-    if best_match_index >= len(descriptions):
-        print("No valid match found.")
+    query_embedding = np.array([get_embedding(query)]).astype('float32')
+    distances, indices = index.search(query_embedding, top_k)
+    results = []
+    for rank, idx in enumerate(indices[0]):
+        if idx >= len(descriptions):
+            continue
+        desc = descriptions[idx]
+        # Find corresponding document in the catalog
+        matched_doc = functions_catalog.find_one({"key": desc})
+        if matched_doc:
+            results.append({
+                "score": float(distances[0][rank]),
+                "key": desc,
+                "value": matched_doc["value"]
+            })
+    if not results:
         return None
+    return results[0] if top_k == 1 else results
 
-    best_match_desc = descriptions[best_match_index]
-    matched_function = functions_catalog.find_one({"key": best_match_desc})  # Corrected MongoDB query
-
-    return matched_function
-
-# Ensure function is executed correctly
 if __name__ == "__main__":
-    index, descriptions = build_faiss_index()
+    logger.info("Building FAISS index from 'functions_catalog' ...")
+    index, descriptions, function_map = build_faiss_index()
     if index:
-        save_faiss_index(index, descriptions)
-
-    # Test function retrieval
-    test_query = "Train decision tree"
-    result = search_function(test_query)
-
-    if result:
-        print("Best function match found:", result)
+        save_faiss_index(index, descriptions, function_map)
+        logger.info("Vector store built successfully.")
+        # Quick test of the search functionality
+        test_query = "Train a decision tree"
+        top_result = search_function(test_query)
+        if top_result:
+            logger.info(f"Test query: '{test_query}' => best match key: {top_result['key']}")
+        else:
+            logger.warning(f"No match found for test query '{test_query}'")
     else:
-        print("No matching function found.")
+        logger.error("Failed to build the vector store index.")

@@ -1,26 +1,40 @@
+#!/usr/bin/env python3
 import importlib
-import json
 import traceback
-
 
 def execute_python_function(function_details, args):
     """
-    Executes a Python function dynamically.
-
-    :param function_details: Dictionary containing function metadata (package, function_name).
-    :param args: Dictionary containing the function arguments.
-    :return: Execution result or error message.
+    Dynamically import a Python module and execute the specified function
+    with given arguments.
     """
     try:
-        # Import the required module dynamically
-        module = importlib.import_module(function_details["package"])
+        package_name = function_details["package"]
+        function_name = function_details["function_name"]
 
-        # Get the function from the module
-        func = getattr(module, function_details["function_name"])
+        # Import the module and get the function object
+        module = importlib.import_module(package_name)
+        func = getattr(module, function_name)
 
-        # Execute the function with arguments
+        # Execute the function with provided arguments
         result = func(**args)
-        return {"success": True, "result": result}
 
+        return {
+            "success": True,
+            "result": result
+        }
     except Exception as e:
-        return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
+        return {
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
+
+# Optional local test
+if __name__ == "__main__":
+    function_details = {
+        "package": "math",
+        "function_name": "sqrt"
+    }
+    args = {"x": 16}
+    output = execute_python_function(function_details, args)
+    print(output)
