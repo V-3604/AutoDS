@@ -13,7 +13,6 @@ AutoDS is an AI-powered CLI tool that interprets natural language queries (e.g. 
 ---
 
 ## Limitations
-- Requires **MongoDB** (for storing function metadata), **OpenAI API key** (for embeddings), and a proper **R** setup (for R functions).
 - User must build the function database (via scrapers) before use.
 - CLI cannot show plots/GUI output; only textual results.
 
