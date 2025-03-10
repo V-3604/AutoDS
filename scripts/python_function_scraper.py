@@ -36,7 +36,11 @@ required_packages = [
     "numpy",
     "faiss-cpu",
     "openai",
-    "python-dotenv"
+    "python-dotenv",
+    "scipy",
+    "scikit-learn",
+    "pandas",
+    "matplotlib"
 ]
 
 for package in required_packages:
@@ -100,25 +104,16 @@ AUTODS_PYTHON_PACKAGES = [
     "numpy", "pandas", "scipy",
 
     # Visualization
-    "matplotlib", "seaborn", "plotly",
+    "matplotlib", "seaborn",
 
     # Machine learning
-    "sklearn", "xgboost", "lightgbm",
-
-    # Deep learning (only if needed)
-    # "tensorflow", "keras", "torch",
-
-    # NLP (if needed)
-    # "nltk", "spacy",
-
-    # Data processing
-    "sqlalchemy", "requests",
+    "sklearn",
 
     # Statistical analysis
     "statsmodels",
 
     # Utilities
-    "joblib"
+    "math"
 ]
 
 
@@ -272,7 +267,7 @@ def process_package(package_name):
             try:
                 import pkgutil
                 for _, submodule_name, is_pkg in pkgutil.iter_modules(package.__path__, package_name + "."):
-                    if not is_pkg:
+                    if not is_pkg and not submodule_name.endswith('._') and not '_._' in submodule_name:
                         try:
                             submodule_functions = extract_module_functions(submodule_name)
                             all_functions.extend(submodule_functions)
@@ -323,100 +318,70 @@ def store_functions_mongo(functions):
         return 0
 
 
-def generate_embeddings(texts: List[str]) -> Optional[List[np.ndarray]]:
-    """Generate embeddings using OpenAI API"""
-    if not OPENAI_AVAILABLE or not OPENAI_API_KEY:
-        return None
-
+def add_linear_regression_functions():
+    """Add specific linear regression functions to ensure they're available"""
     try:
-        batch_size = 100  # OpenAI recommends batching requests
-        embeddings = []
-
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i:i + batch_size]
-            logger.info(
-                f"Processing embedding batch {i // batch_size + 1}/{(len(texts) + batch_size - 1) // batch_size}")
-
-            try:
-                response = openai.Embedding.create(
-                    input=batch,
-                    model="text-embedding-3-small"
-                )
-                batch_embeddings = [np.array(item['embedding']) for item in response['data']]
-                embeddings.extend(batch_embeddings)
-            except Exception as e:
-                logger.error(f"Error generating embeddings: {e}")
-                return None
-
-        return embeddings
-
-    except Exception as e:
-        logger.error(f"Error in embedding generation: {e}")
-        return None
-
-
-def build_faiss_index():
-    """Build FAISS index for function search"""
-    if not FAISS_AVAILABLE:
-        logger.warning("FAISS not available. Skipping index building.")
-        return
-
-    logger.info("Building FAISS index for function search")
-
-    try:
-        # Connect to MongoDB
         client = get_mongo_client()
         db = client["AutoDS"]
         collection = db["python_functions"]
 
-        # Get all functions
-        all_functions = []
-        cursor = collection.find({})
+        # Check if we need to add sklearn LinearRegression
+        lr_exists = collection.count_documents({
+            "package": "sklearn.linear_model",
+            "function_name": "LinearRegression"
+        })
 
-        for func in cursor:
-            # Create a search key from function name and docstring
-            key = f"{func.get('package', '')}.{func.get('function_name', '')}: {func.get('docstring', '')[:100]}"
-            all_functions.append({
-                "id": str(func["_id"]),
-                "key": key,
-                "package": func.get("package", ""),
-                "function_name": func.get("function_name", ""),
-                "docstring": func.get("docstring", "")
-            })
+        if lr_exists == 0:
+            logger.info("Adding sklearn.linear_model.LinearRegression manually")
+            lr_function = {
+                "package": "sklearn.linear_model",
+                "module": "sklearn.linear_model",
+                "function_name": "LinearRegression",
+                "signature": "LinearRegression(fit_intercept=True, normalize=False, copy_X=True, n_jobs=None, positive=False)",
+                "parameters": [
+                    {"name": "fit_intercept", "kind": "POSITIONAL_OR_KEYWORD", "default": "True"},
+                    {"name": "normalize", "kind": "POSITIONAL_OR_KEYWORD", "default": "False"},
+                    {"name": "copy_X", "kind": "POSITIONAL_OR_KEYWORD", "default": "True"},
+                    {"name": "n_jobs", "kind": "POSITIONAL_OR_KEYWORD", "default": "None"},
+                    {"name": "positive", "kind": "POSITIONAL_OR_KEYWORD", "default": "False"}
+                ],
+                "return_annotation": None,
+                "docstring": "Ordinary least squares Linear Regression. LinearRegression fits a linear model with coefficients w = (w1, …, wp) to minimize the residual sum of squares between the observed targets in the dataset, and the targets predicted by the linear approximation.",
+                "full_function_call": "sklearn.linear_model.LinearRegression()",
+                "language": "python"
+            }
+            collection.insert_one(lr_function)
+            logger.info("Added sklearn.linear_model.LinearRegression to database")
+
+        # Check if we need to add scipy.stats.linregress
+        linregress_exists = collection.count_documents({
+            "package": "scipy.stats",
+            "function_name": "linregress"
+        })
+
+        if linregress_exists == 0:
+            logger.info("Adding scipy.stats.linregress manually")
+            linregress_function = {
+                "package": "scipy.stats",
+                "module": "scipy.stats",
+                "function_name": "linregress",
+                "signature": "linregress(x, y=None)",
+                "parameters": [
+                    {"name": "x", "kind": "POSITIONAL_OR_KEYWORD", "default": None},
+                    {"name": "y", "kind": "POSITIONAL_OR_KEYWORD", "default": "None"}
+                ],
+                "return_annotation": None,
+                "docstring": "Calculate a linear regression for two sets of measurements. The linear regression calculates the best fit line for the observed data by minimizing the sum of the squares of the vertical deviations from each data point to the line.",
+                "full_function_call": "scipy.stats.linregress(x, y)",
+                "language": "python"
+            }
+            collection.insert_one(linregress_function)
+            logger.info("Added scipy.stats.linregress to database")
 
         client.close()
 
-        if not all_functions:
-            logger.warning("No functions found to index")
-            return
-
-        # Generate embeddings if OpenAI is available
-        if OPENAI_AVAILABLE and OPENAI_API_KEY:
-            logger.info(f"Generating embeddings for {len(all_functions)} functions")
-            function_texts = [func["key"] for func in all_functions]
-            embeddings = generate_embeddings(function_texts)
-
-            if embeddings:
-                # Create FAISS index
-                embeddings_array = np.array(embeddings).astype('float32')
-                dimension = embeddings_array.shape[1]
-                index = faiss.IndexFlatL2(dimension)
-                index.add(embeddings_array)
-
-                # Save the index and function IDs
-                faiss.write_index(index, "python_function_index.bin")
-                with open("python_function_ids.json", "w") as f:
-                    json.dump([{"id": func["id"], "key": func["key"]} for func in all_functions], f)
-
-                logger.info(f"FAISS index created with {len(embeddings)} functions")
-            else:
-                logger.warning("No embeddings generated")
-        else:
-            logger.warning("OpenAI API key not provided, skipping embedding generation")
-
     except Exception as e:
-        logger.error(f"Error building FAISS index: {e}")
-        logger.error(traceback.format_exc())
+        logger.error(f"Error adding linear regression functions: {e}")
 
 
 def main():
@@ -468,18 +433,15 @@ def main():
                 logger.error(traceback.format_exc())
                 failed_packages.append(package)
 
+        # Add linear regression functions manually
+        add_linear_regression_functions()
+
         # Log summary
         logger.info("Database expansion completed:")
         logger.info(f"  - Attempted to process {len(packages)} packages")
         logger.info(f"  - Successfully processed {len(processed_packages)} packages")
         logger.info(f"  - Failed to process {len(failed_packages)} packages")
         logger.info(f"  - Total functions stored: {total_functions}")
-
-        # Build FAISS index if functions were stored
-        if total_functions > 0:
-            build_faiss_index()
-        else:
-            logger.warning("No functions stored, skipping FAISS index building")
 
         logger.info("Database expansion completed")
 

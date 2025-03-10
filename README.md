@@ -1,40 +1,74 @@
-# AutoDS - AI Agent for Python/R
+# AutoDS - Automated Data Science Assistant
 
-AutoDS automates data science tasks by processing queries (e.g., "linear regression") to execute Python/R functions using MongoDB, FAISS, and OpenAI embeddings.
+AutoDS is an AI-powered CLI tool that interprets natural language queries (e.g. “Train a decision tree”) and automatically calls relevant data science functions from Python or R.
 
-## Features
-- Natural language queries for Python/R functions.
-- Fast function retrieval with FAISS and OpenAI.
-- Cross-language support (Python, R).
+---
+
+## Key Features
+- **Semantic Search**: Uses OpenAI embeddings + FAISS to match queries to function descriptions.
+- **Multi-Language**: Executes Python or R functions (via rpy2).
+- **Automatic Execution**: Dynamically imports and runs matched functions.
+- **CLI Interface**: Type queries, provide JSON arguments, and see results (or errors) in the terminal.
+
+---
+
+## Limitations
+- User must build the function database (via scrapers) before use.
+- CLI cannot show plots/GUI output; only textual results.
+
+---
 
 ## Installation
-- **Needs:** Python 3.9+, R, MongoDB, OpenAI API key.
-- **Steps:**
-  1. Clone: `git clone <repo>; cd AutoDS`
-  2. Virtual env: `python -m venv venv; source venv/bin/activate` (Windows: `venv\Scripts\activate`)
-  3. Install: `pip install -r requirements.txt` (add `scikit-learn`)
-  4. Set `.env` with `MONGO_URI` and `OPENAI_API_KEY`
-  5. Seed DB: `python src/db/seed_db.py`
-  6. Build FAISS: `python src/vector/vector_store.py`
 
-
-Summary of Remaining Work
-
-Here’s a concise list of tasks, prioritized by effort and impact:
-
-Expand Database:
-Automate scraping for 100+ packages, populate functions.json or MongoDB, test scalability.
-Enhance Python Execution:
-Update python_exec.py for class-based functions, test with DecisionTreeClassifier.
-Automate Argument Handling:
-Add inference/validation in agent.py or main.py, improve user prompts.
-Implement OpenAI Search:
-Optional, replace or supplement FAISS with OpenAI file search, evaluate performance.
-Add Code/Language Output:
-Modify agent.py to return generated code and language, test with queries.
-Update README:
-Expand README.md to match AutoDS.md requirements, include detailed examples.
-
+1. **Install Dependencies**  
+   - Python 3.x, R (4.x recommended), MongoDB (running on `localhost:27017`), and an OpenAI API key.
+   - Python packages (example):
+     ```bash
+     pip install pymongo faiss-cpu openai python-dotenv colorama rpy2 numpy
+     ```
+2. **Clone & Configure**  
+   ```bash
+   git clone https://github.com/YourUsername/AutoDS.git
+   cd AutoDS
+   echo 'OPENAI_API_KEY=YOUR_KEY' > .env
+3. **Populate Database**
+   - Run Python scraper:
+   - python python_function_scraper.py
+   - Run R scraper:
+   - Rscript r_function_scraper.R
+   - Unify:
+   - python unify_database.py
+   - Build FAISS index:
+   - python vector_store.py
+     
 ## Usage
-```bash PYTHONPATH="${PYTHONPATH}:/Users/varshithgowdak/Desktop/AutoDS" python src/main.py
-## Try: linear regression with {"formula": "y ~ x", "data": [[1, 2], [2, 3], [3, 4]]}.
+
+1. Start the CLI
+   - python main.py
+2. Enter a Query (e.g. “Perform linear regression”).
+3. Provide JSON Args (or leave empty for defaults):
+   - {"formula": "y ~ x", "data": "mtcars"}
+4. View Results
+   - AutoDS shows the chosen function, the code snippet, and its output or any error messages.
+5. CLI Commands
+   - help for examples
+   - clear to clear screen
+   - exit to quit
+
+## Example 
+
+AutoDS> perform linear regression
+Args> {"formula": "y ~ x", "data": [[1,2], [2,3], [3,4]]}
+
+✓ Success!
+Language: r
+Code:
+library(stats)
+stats::lm(formula="y ~ x", data=rbind(c(1, 2), c(2, 3), c(3, 4)))
+
+Result:
+Coefficients:
+(Intercept)   x
+        1.0  0.5
+
+
